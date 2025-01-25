@@ -188,6 +188,7 @@ class IluvatarBackend:
             'runtime_memory': self.runtime_memory,
             'function_name': self.function_name,
             'runtime_timeout': self.runtime_timeout,
+            'max_workers': self.max_workers
         }
 
     def _generate_runtime_meta(self, docker_image_name, memory):
