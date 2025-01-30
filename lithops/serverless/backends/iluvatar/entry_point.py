@@ -34,7 +34,8 @@ def main(args):
         # decode the data
         args_dict = decode_iluvatar_body(data)
 
-        args_dict['data_byte_strs'] = [repr(element) for element in args_dict['data_byte_strs']]
+        if 'data_byte_strs' in args_dict:
+            args_dict['data_byte_strs'] = [repr(element) for element in args_dict['data_byte_strs']]
 
         # check why this is needed
         os.environ['__LITHOPS_BACKEND'] = 'Iluvatar'
