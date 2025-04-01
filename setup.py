@@ -84,6 +84,9 @@ extras_require = {
     ],
     'tests': [
         'pytest',
+    ],
+    'iluvatar':[
+        'py2lambda',
     ]
 }
 

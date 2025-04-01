@@ -13,6 +13,9 @@ from lithops.constants import COMPUTE_CLI_MSG
 from . import config
 import pickle
 import re
+import shutil
+import tempfile
+import time
 logger = logging.getLogger(__name__)
 
 
@@ -42,6 +45,7 @@ class IluvatarBackend:
         self.function_version = self.il_config.get('function_version', '1')
         self.function_name = f"lithops_{self.runtime}_{self.runtime_memory}MB_iluvatar_action_{self.function_version}"
         self.docker_image_name = self.il_config.get('docker_image_name',  None)
+        self.iluvatar_gcp_credential_path = self.il_config.get('iluvatar_gcp_credential_path', None)
 
 
         # TODO, during deploy build and push the image to the registy, use lithops lib from directory
@@ -82,58 +86,92 @@ class IluvatarBackend:
         else:
             return runtime_name
 
+
+
     def build_runtime(self, runtime_name, dockerfile=None, extra_args=[]):
         """
-        Build the Docker image for the function.
+        Build the Docker image for the function using the ilubuild CLI.
+
+        Steps:
+        1. Create a temporary directory.
+        2. Copy requirements.txt from the current working directory (where the script using Lithops is running)
+            into the temporary directory.
+        3. Copy entry_point.py (from os.path.dirname(__file__)) to a file named main.py in the temporary directory.
+        4. Copy the credential JSON file (if provided) from self.iluvatar_credential_path into the temporary directory.
+        5. Call the ilubuild CLI with the temporary directory as the function directory.
         """
-        logger.info(f"Building runtime: {runtime_name}")
-        docker_path = utils.get_docker_path()
-        image_name = self._format_image_name(runtime_name)
-
-        if dockerfile:
-            assert os.path.exists(dockerfile), f"Dockerfile not found: {dockerfile}"
-            cmd = f'{docker_path} build --platform=linux/amd64 -t {image_name} -f {dockerfile} . '
-        else:
-            cmd = f'{docker_path} build --platform=linux/amd64 -t {image_name} . '
-        cmd = cmd + ' '.join(extra_args)
-
-        try:
-            entry_point = os.path.join(os.path.dirname(__file__), 'entry_point.py')
-            utils.create_handler_zip(config.FH_ZIP_LOCATION, entry_point, 'main.py')
-
-            utils.run_command(cmd)
-        finally:
-            os.remove(config.FH_ZIP_LOCATION)
-
-        logger.debug("Logging in to Docker registry")
-
-        if self.docker_user and self.docker_password:
-            cmd = f'{docker_path} login -u {self.docker_user} --password-stdin {self.docker_server}'
-            utils.run_command(cmd, input=self.docker_password)
+        logger.info(f"Building runtime using ilubuild: {runtime_name}")
         
-        logger.debug(f"Pushing image to Docker registry {image_name}")
-        cmd = f'{docker_path} push {image_name}'
-        utils.run_command(cmd)
+        image_name = self._format_image_name(runtime_name)
+        
+        # Create a temporary directory to serve as the function directory.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            logger.debug(f"Created temporary directory: {tmpdir}")
 
-        logger.debug("Building done. Image ready to be used.")
-        import time
-        time.sleep(3)
+            # Step 1: Copy requirements.txt from the current working directory, if it exists.
+            req_src = os.path.join(os.getcwd(), "requirements.txt")
+            req_dst = os.path.join(tmpdir, "requirements.txt")
+            if os.path.exists(req_src):
+                shutil.copy(req_src, req_dst)
+                logger.debug(f"Copied requirements.txt from {req_src} to {req_dst}")
+            else:
+                logger.debug("No requirements.txt found in the current working directory.")
+
+            # Step 2: Copy entry_point.py from the directory where this file resides to main.py in the temp dir.
+            src_dir = os.path.dirname(__file__)
+            entry_point_src = os.path.join(src_dir, "entry_point.py")
+            main_py_dst = os.path.join(tmpdir, "main.py")
+            if not os.path.exists(entry_point_src):
+                raise FileNotFoundError(f"entry_point.py not found in {src_dir}")
+            shutil.copy(entry_point_src, main_py_dst)
+            logger.debug(f"Copied {entry_point_src} to {main_py_dst}")
+
+            # Step 3: If iluvatar credential path is provided, copy that file to the temp dir.
+            cred_path = self.il_config.get('iluvatar_credential_path', None)
+            if cred_path:
+                if not os.path.exists(cred_path):
+                    raise FileNotFoundError(f"Credential file not found: {cred_path}")
+                cred_dst = os.path.join(tmpdir, os.path.basename(cred_path))
+                shutil.copy(cred_path, cred_dst)
+                logger.debug(f"Copied credential file from {cred_path} to {cred_dst}")
+            else:
+                logger.debug("No iluvatar credential file provided in configuration.")
+
+            # Step 4: Build the ilubuild CLI command.
+            cmd = [
+                "py2lambda",
+                "--function-dir", tmpdir,
+                "--runtime", "python",
+                "--tag", image_name,
+            ]
+            
+            # Append Docker registry credentials if provided.
+            if self.docker_user:
+                cmd.extend(["--docker-user", self.docker_user])
+            if self.docker_password:
+                cmd.extend(["--docker-pass", self.docker_password])
+            
+            # Append any extra arguments if provided.
+            if extra_args:
+                cmd.extend(extra_args)
+            
+            logger.info(f"Building image: {image_name}")
+            logger.debug(f"Executing ilubuild command: {' '.join(cmd)}")
+            # Execute the ilubuild command.
+            utils.run_command(" ".join(cmd))
+            logger.debug("Runtime build completed using ilubuild.")
+            time.sleep(3)
+            return image_name
+
 
     def deploy_runtime(self, runtime_name, memory, timeout):
         """
         Registers the function image with Iluvatar if not done yet.
         Then returns runtime metadata.
         """
-        #TO DO: add such functionality in iluvatar to list/check registered functions
-        # if self.is_function_registered():
-        #     logger.debug(f"Function {self.function_name} already registered.")
-        #     return self._generate_runtime_meta(docker_image_name, memory)
         logger.debug(f"Deploying runtime: {runtime_name}")
-        if self.docker_image_name == None:
-            self._build_default_runtime(runtime_name)
-        logger.debug("build ????")
-        # format image name using the runtime_name
-        docker_image_name = self._format_image_name(runtime_name)
+        logger.info("Building Image")
+        docker_image_name = self.build_runtime(runtime_name)
 
         logger.info(f"Registering Iluvatar function: name={self.function_name}, version={self.function_version} "
                     f"image={runtime_name}, mem={memory}, timeout={timeout}")
@@ -151,7 +189,7 @@ class IluvatarBackend:
             "--memory", str(memory),
             "--cpu", "1", 
             "--image", docker_image_name,
-            "--isolation", "docker"        
+            "--isolation", "DOCKER"        
         ]
         try:
             completed_proc = subprocess.run(cli_cmd, capture_output=True, text=True, check=True)
