@@ -38,12 +38,13 @@ class IluvatarBackend:
         self.is_lithops_worker = utils.is_lithops_worker()
 
         self.worker_url = self.il_config['worker_url']
+        self.skip_build = iluvatar_config.get('runtime', None) is not None
         self.runtime = self.il_config.get('runtime', self._get_default_runtime_image_name())     # e.g. "docker.io/myuser/lithops-iluvatar:latest"
         self.runtime_memory = self.il_config['runtime_memory']
         self.runtime_timeout = self.il_config['runtime_timeout']
         self.max_workers = self.il_config['max_workers']
         self.function_version = self.il_config.get('function_version', '1')
-        self.function_name = f"lithops_{self.runtime}_{self.runtime_memory}MB_iluvatar_action_{self.function_version}"
+        self.function_name = self.il_config.get('function_name', 'lithops-iluvatar')
         self.docker_image_name = self.il_config.get('docker_image_name',  None)
         self.iluvatar_gcp_credential_path = self.il_config.get('iluvatar_gcp_credential_path', None)
 
@@ -171,7 +172,9 @@ class IluvatarBackend:
         """
         logger.debug(f"Deploying runtime: {runtime_name}")
         logger.info("Building Image")
-        docker_image_name = self.build_runtime(runtime_name)
+        docker_image_name = self.runtime
+        if not self.skip_build:
+            docker_image_name = self.build_runtime(runtime_name)
 
         logger.info(f"Registering Iluvatar function: name={self.function_name}, version={self.function_version} "
                     f"image={runtime_name}, mem={memory}, timeout={timeout}")
