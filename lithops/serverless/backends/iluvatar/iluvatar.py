@@ -37,7 +37,8 @@ class IluvatarBackend:
         self.internal_storage = internal_storage
         self.is_lithops_worker = utils.is_lithops_worker()
 
-        self.worker_url = self.il_config['worker_url']
+        self.worker_host = self.il_config['host']
+        self.worker_port = self.il_config['port']
         self.skip_build = iluvatar_config.get('runtime', None) is not None
         self.runtime = self.il_config.get('runtime', self._get_default_runtime_image_name())     # e.g. "docker.io/myuser/lithops-iluvatar:latest"
         self.runtime_memory = self.il_config['runtime_memory']
@@ -47,6 +48,9 @@ class IluvatarBackend:
         self.function_name = self.il_config.get('function_name', 'lithops-iluvatar')
         self.docker_image_name = self.il_config.get('docker_image_name',  None)
         self.iluvatar_gcp_credential_path = self.il_config.get('iluvatar_gcp_credential_path', None)
+        self.cpu = self.il_config.get('cpu', 1)
+        self.gpu = self.il_config.get('gpu', 0)
+        self.worker_url = "something"
 
 
         # TODO, during deploy build and push the image to the registy, use lithops lib from directory
@@ -182,17 +186,20 @@ class IluvatarBackend:
         # TODO as of now using CLI to invoke/register, but parsing response is messy and error prone, 
         # one option is to  make and use RPC client 
         logger.debug("image name is " + docker_image_name)
+        compute_type = "GPU" if getattr(self, "gpu", 0) == 1 else "CPU"
+
         cli_cmd = [
             "./iluvatar_worker_cli",
-            "--host", '127.0.0.1',
-            "--port", '8031',
+            "--host", self.worker_host,
+            "--port", self.worker_port,
             "register",
             "--name", self.function_name,
             "--version", self.function_version,
             "--memory", str(memory),
-            "--cpu", "1", 
+            "--cpu", str(self.cpu),
+            "--COMPUTE", compute_type,
             "--image", docker_image_name,
-            "--isolation", "DOCKER"        
+            "--isolation", "DOCKER"
         ]
         try:
             completed_proc = subprocess.run(cli_cmd, capture_output=True, text=True, check=True)
@@ -244,8 +251,8 @@ class IluvatarBackend:
             strpayload = str(encoded_payload)
             cli_cmd = [
                 "./iluvatar_worker_cli",
-                "--host", '127.0.0.1',
-                "--port", '8031',
+                "--host", self.worker_host,
+                "--port", self.worker_port,
                 "invoke",
                 "--name", str(self.function_name),
                 "--version", str(1),
